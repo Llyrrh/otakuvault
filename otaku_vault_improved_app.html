@@ -1,0 +1,142 @@
+<!-- OTAKUVAULT UPGRADED (COMPATIBLE WITH ORIGINAL ov_db)
+Adds:
+- Smart Recommendations (no API)
+- Backup/Restore
+- Debounced search
+- Mobile sidebar
+- AniList search (basic, no auth)
+-->
+
+<script>
+// ===== SAFE INIT (keeps existing data) =====
+const DEFAULT_DB={profile:{username:'Otaku',bio:'',accent:'#e63757',avatarUrl:'',bannerUrl:''},library:[],favs:[],chars:[],epRatings:{},works:[],links:{}};
+let db=JSON.parse(localStorage.getItem('ov_db')||'{}');
+db={...DEFAULT_DB,...db};
+db.profile={...DEFAULT_DB.profile,...db.profile};
+function save(){localStorage.setItem('ov_db',JSON.stringify(db))}
+
+// ===== SMART RECOMMENDATIONS =====
+function getSmartRecommendations(item){
+  return db.library
+    .filter(i=>i.type===item.type && i.id!==item.id)
+    .map(i=>{
+      let score=0;
+      if(item.rating && i.rating) score += 5-Math.abs(item.rating-i.rating);
+      if(i.status==='completed') score+=1;
+      return {item:i,score};
+    })
+    .sort((a,b)=>b.score-a.score)
+    .slice(0,5)
+    .map(x=>x.item);
+}
+
+// ===== BACKUP =====
+function exportData(){
+  const blob=new Blob([JSON.stringify(db)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='otakuvault-backup.json';
+  a.click();
+}
+
+function importData(file){
+  const r=new FileReader();
+  r.onload=e=>{
+    try{
+      const data=JSON.parse(e.target.result);
+      db={...db,...data};
+      db.profile={...DEFAULT_DB.profile,...db.profile};
+      save();
+      alert('Imported!');
+      location.reload();
+    }catch{alert('Invalid file')}
+  };
+  r.readAsText(file);
+}
+
+// ===== PERFORMANCE SEARCH =====
+let filterTimeout;
+function filterLib(q){
+  clearTimeout(filterTimeout);
+  filterTimeout=setTimeout(()=>{
+    renderLibGrid(getFilteredLib(q));
+  },150);
+}
+
+// ===== MOBILE =====
+function toggleSidebar(){
+  document.querySelector('.sidebar')?.classList.toggle('open');
+}
+
+// ===== KEY SHORTCUT =====
+document.addEventListener('keydown',e=>{
+  if(e.key==='/'){
+    e.preventDefault();
+    document.getElementById('filter-input')?.focus();
+  }
+});
+
+// ===== ANILIST SEARCH (FREE) =====
+async function aniSearch(query){
+  const res=await fetch('https://graphql.anilist.co',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      query:`query($search:String){Page(perPage:6){media(search:$search){id title{romaji} coverImage{large} episodes chapters type}}}`,
+      variables:{search:query}
+    })
+  });
+  const json=await res.json();
+  return json.data.Page.media;
+}
+
+async function renderAniResults(q){
+  const data=await aniSearch(q);
+  const box=document.getElementById('anilist-results');
+  box.innerHTML=data.map(i=>`
+    <div class="card" onclick="addFromAni(${i.id},'${i.title.romaji.replace(/'/g,'')}','${i.coverImage.large}',${i.episodes||i.chapters||0},'${i.type.toLowerCase()}')">
+      <img src="${i.coverImage.large}" style="width:60px"><br>
+      ${i.title.romaji}
+    </div>
+  `).join('');
+}
+
+function addFromAni(id,title,cover,total,type){
+  if(db.library.find(i=>i.id==id)) return alert('Already added');
+  db.library.push({
+    id:String(id),
+    title,
+    cover,
+    type:type==='anime'?'anime':'manga',
+    totalEpisodes:type==='anime'?total:0,
+    totalChapters:type!=='anime'?total:0,
+    status:'planning',
+    addedAt:Date.now()
+  });
+  save();
+  alert('Added!');
+}
+
+// ===== PATCH DETAIL VIEW =====
+const oldOpenDetail=window.openDetail;
+window.openDetail=function(id){
+  oldOpenDetail(id);
+  const item=db.library.find(i=>i.id===id);
+  const recs=getSmartRecommendations(item);
+  const container=document.createElement('div');
+  container.innerHTML=`<h3>Smart Recs</h3>${recs.map(r=>`<div onclick="openDetail('${r.id}')">${r.title}</div>`).join('')}`;
+  document.getElementById('content').appendChild(container);
+}
+
+</script>
+
+<!-- SIMPLE UI ADDITIONS -->
+<div style="position:fixed;bottom:10px;right:10px;z-index:999">
+  <button onclick="exportData()">Export</button>
+  <input type="file" onchange="importData(this.files[0])">
+</div>
+
+<div style="padding:10px">
+  <input placeholder="Search AniList" oninput="renderAniResults(this.value)">
+  <div id="anilist-results"></div>
+</div>
